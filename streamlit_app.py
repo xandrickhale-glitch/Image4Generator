@@ -1,13 +1,12 @@
 # imagen_enhanced.py — Imagen 4 (Gemini API) + Outline + Prompt Doctor
-# ---- Preflight import guard (taruh di baris sangat awal) ----
-import sys, os, io, pkgutil, importlib
+import os, io
 import streamlit as st
 from PIL import Image
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="Imagen 4 — Gemini API", page_icon="🎨", layout="wide")
-st.title("🎨 Imagen 4 —  Generator")
+st.set_page_config(page_title="Imagen Generator", page_icon="🎨", layout="wide")
+st.title("🎨 Imagen4 — Gemini")
 
 # ---------- Session state ----------
 if "gallery" not in st.session_state:
