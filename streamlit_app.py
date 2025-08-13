@@ -1,31 +1,102 @@
-# imagen_enhanced.py — Imagen 4 (Gemini API) + Outline + Prompt Doctor
-import os, io
+# streamlit_app.py
+# Imagen 4 Generator — Gemini API (no billing, no JSON)
+# Fitur:
+# - Import guard (jelas jika SDK/namespace bermasalah)
+# - Outline tipis antar bagian (container border=True)
+# - Prompt Doctor (enhancer) sesuai kaidah Imagen 4
+# - Gallery persisten (download tidak menghilangkan hasil)
+# - Model: imagen-4.0-generate-preview-06-06 & imagen-4.0-ultra-generate-preview-06-06
+
+import os
+import io
+import pkgutil
+
 import streamlit as st
-from PIL import Image
-from google import genai
-from google.genai import types
 
-st.set_page_config(page_title="Imagen Generator", page_icon="🎨", layout="wide")
-st.title("🎨 Imagen4 — Gemini")
+st.set_page_config(page_title="Imagen 4", page_icon="🎨", layout="wide")
+st.title("🎨 Imagen 4 — Gemini)")
 
-# ---------- Session state ----------
+# ---------------------------
+# Import Guard (anti-ImportError)
+# ---------------------------
+problems = []
+
+# 1) Cek konflik nama lokal 'google'
+if os.path.exists("./google") or os.path.exists("./google.py"):
+    problems.append(
+        "Ada folder/file bernama **`google`** di repo. Rename (mis. `gutils/`)."
+    )
+
+# 2) Deteksi paket pip 'google' yang menimpa namespace
+has_bad_google = False
+try:
+    import google as _g  # type: ignore
+    # Jika ada __file__, biasanya ini paket 'google' lama yang men-shadow namespace package
+    if getattr(_g, "__file__", None):
+        has_bad_google = True
+except Exception:
+    # kalau import gagal di sini, biarkan guard berikutnya yang menangani
+    pass
+
+if has_bad_google:
+    problems.append(
+        "Terpasang paket pip **`google`** (bukan SDK resmi). Hapus dari requirements dan rebuild."
+    )
+
+# 3) Coba import google.genai untuk pastikan SDK terpasang
+_has_genai = True
+try:
+    from google import genai as _test_genai  # type: ignore
+    del _test_genai
+except Exception:
+    _has_genai = False
+
+if not _has_genai:
+    problems.append(
+        "Paket **`google-genai`** belum terpasang di environment. "
+        "Pastikan `requirements.txt` berisi `google-genai>=1.29.0,<2.0.0` lalu Clear cache + Restart."
+    )
+
+if problems:
+    with st.container(border=True):
+        st.error("Gagal import `google.genai` karena masalah environment:")
+        for p in problems:
+            st.markdown(f"- {p}")
+        st.markdown(
+            "Langkah pemulihan cepat:\n"
+            "1) Hapus paket `google` dari requirements (jika ada)\n"
+            "2) Tambah `google-genai>=1.29.0,<2.0.0`\n"
+            "3) Pastikan tidak ada folder/file bernama `google` di repo\n"
+            "4) Clear cache + Restart app"
+        )
+    st.stop()
+
+# Aman: import SDK resmi
+from google import genai  # type: ignore
+from google.genai import types  # type: ignore
+st.caption("✅ google-genai import OK — siap generate")
+
+# ---------------------------
+# Session State (persist hasil)
+# ---------------------------
 if "gallery" not in st.session_state:
-    st.session_state.gallery = []     # [{"bytes":..., "fname":...}]
+    st.session_state.gallery = []     # list of {"bytes":..., "fname": ...}
 if "gen_id" not in st.session_state:
     st.session_state.gen_id = 0
 if "enhanced_preview" not in st.session_state:
     st.session_state.enhanced_preview = ""
 
-# ---------- Helpers ----------
+# ---------------------------
+# Helper: Aspect phrase + Prompt enhancer
+# ---------------------------
 def aspect_phrase(ar: str) -> str:
-    mapping = {
+    return {
         "16:9": "wide 16:9 composition",
         "9:16": "vertical 9:16 composition",
         "4:3": "classic 4:3 composition",
         "3:4": "vertical 3:4 composition",
         "1:1": "square composition",
-    }
-    return mapping.get(ar, "")
+    }.get(ar, "")
 
 def enhance_prompt(
     base: str,
@@ -46,7 +117,7 @@ def enhance_prompt(
     if base.strip():
         parts.append(base.strip())
 
-    # Preset bundles
+    # Preset bundle
     if preset == "Cinematic":
         parts += ["cinematic look", "dramatic lighting", "rich contrast", "filmic color grading"]
     elif preset == "Studio Portrait":
@@ -58,7 +129,7 @@ def enhance_prompt(
     elif preset == "3D Render":
         parts += ["ultra-detailed 3D render", "physically based rendering", "global illumination"]
 
-    # Medium-specific hints
+    # Medium
     if medium == "Photo":
         parts += ["photograph", "realistic details", "sharp focus"]
     elif medium == "Illustration":
@@ -66,35 +137,35 @@ def enhance_prompt(
     elif medium == "3D Render":
         parts += ["3D render", "ray tracing aesthetics"]
 
-    # User selections
+    # User fields
     for x in [style, lighting, composition, color, mood, quality, ar_text]:
         if x and x != "None":
             parts.append(x)
 
-    # Camera (only if set)
+    # Camera (for Photo)
     if medium == "Photo":
         cam_bits = []
-        if camera_lens_mm:
-            cam_bits.append(f"{camera_lens_mm}mm lens")
-        if camera_aperture:
-            cam_bits.append(f"{camera_aperture} aperture")
+        if camera_lens_mm.strip():
+            cam_bits.append(f"{camera_lens_mm.strip()}mm lens")
+        if camera_aperture.strip():
+            cam_bits.append(f"{camera_aperture.strip()} aperture")
         if cam_bits:
             parts.append(", ".join(cam_bits))
 
-    # Safe phrase for people (helps avoid safety blocks for generic non-celebrity adults)
     if safe_person_phrase:
         parts.append("non-celebrity adult person")
 
-    # Deduplicate while preserving order
-    seen = set()
-    clean = []
+    # Dedup sambil menjaga urutan
+    seen, clean = set(), []
     for p in parts:
         p = p.strip().strip(",")
         if p and p not in seen:
             clean.append(p); seen.add(p)
     return ", ".join(clean)
 
-# ---------- Sidebar ----------
+# ---------------------------
+# Sidebar: API & Config (outlined)
+# ---------------------------
 with st.sidebar:
     st.header("🔑 API & Model")
     with st.container(border=True):
@@ -116,21 +187,32 @@ with st.sidebar:
         aspect = st.selectbox("Aspect ratio", ["1:1","3:4","4:3","16:9","9:16"], index=0)
         people = st.selectbox("People generation", ["dont_allow","allow_adult","allow_all"], index=1)
         max_imgs = 1 if "ultra-generate" in model_id else 4
-        num_images = st.selectbox("Jumlah gambar", options=list(range(1, max_imgs+1)), index=(max_imgs-1))
-        out_mime = "image/png"  # SDK biasanya mengembalikan PNG
+        num_images = st.selectbox(
+            "Jumlah gambar",
+            options=list(range(1, max_imgs + 1)),
+            index=(max_imgs - 1)
+        )
 
-# ---------- Prompt (original) ----------
+# ---------------------------
+# Original Prompt (outlined)
+# ---------------------------
 with st.container(border=True):
     st.subheader("🧾 Original Prompt")
     prompt = st.text_area(
-        "English prompt (recommended for Imagen)",
-        placeholder="e.g., A photorealistic macro shot of a dew-covered leaf at sunrise, ultra-detailed, 4k",
+        "English prompt (recommended for Imagen 4)",
+        placeholder=(
+            "A photorealistic macro shot of a dew-covered leaf at sunrise, "
+            "ultra-detailed, crisp, 4k"
+        ),
         key="orig_prompt"
     )
 
-# ---------- Prompt Doctor (Enhancer) ----------
+# ---------------------------
+# Prompt Doctor / Enhancer (outlined)
+# ---------------------------
 with st.container(border=True):
     st.subheader("✨ Prompt Doctor — Imagen 4 style")
+
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     with c1:
         preset = st.selectbox("Preset", ["Cinematic","Studio Portrait","Product Shot","Illustration","3D Render","None"], index=0)
@@ -174,9 +256,17 @@ with st.container(border=True):
     with col_enh_b:
         use_enhanced = st.checkbox("Use Enhanced Prompt for Generation", value=True)
 
-    st.text_area("Enhanced Prompt (preview / copy)", value=st.session_state.enhanced_preview, height=120, key="enh_prev", label_visibility="visible")
+    st.text_area(
+        "Enhanced Prompt (preview / copy)",
+        value=st.session_state.enhanced_preview,
+        height=120,
+        key="enh_prev",
+        label_visibility="visible"
+    )
 
-# ---------- Actions ----------
+# ---------------------------
+# Actions (outlined)
+# ---------------------------
 with st.container(border=True):
     st.subheader("🚀 Generate & Manage")
     col_a, col_b, col_c = st.columns([1,1,1])
@@ -189,12 +279,14 @@ with st.container(border=True):
 
 if clear_btn:
     st.session_state.gallery = []
-    st.experimental_rerun()
+    st.rerun()
 
-# ---------- Generate ----------
+# ---------------------------
+# Generate
+# ---------------------------
 if do_gen:
     if not use_key:
-        st.error("Masukkan API key atau set ENV GEMINI_API_KEY terlebih dulu.")
+        st.error("Masukkan API key atau set ENV `GEMINI_API_KEY` terlebih dulu.")
         st.stop()
 
     try:
@@ -203,7 +295,7 @@ if do_gen:
         effective_prompt = (
             st.session_state.enhanced_preview.strip()
             if use_enhanced and st.session_state.enhanced_preview.strip()
-            else prompt.strip()
+            else (prompt or "").strip()
         )
         if not effective_prompt:
             st.error("Prompt belum diisi.")
@@ -223,13 +315,13 @@ if do_gen:
 
         generated = getattr(resp, "generated_images", []) or []
         if not generated:
-            st.warning("Tidak ada gambar (mungkin safety/kuota).")
+            st.warning("Tidak ada gambar (mungkin diblokir safety atau kuota habis).")
         else:
             st.session_state.gen_id += 1
             gen_id = st.session_state.gen_id
             st.session_state.gallery = []
             for i, g in enumerate(generated, start=1):
-                img_bytes = g.image.image_bytes
+                img_bytes = g.image.image_bytes  # PNG by default (SDK)
                 fname = f"{model_id}_gen{gen_id}_{i}.png"
                 st.session_state.gallery.append({"bytes": img_bytes, "fname": fname})
 
@@ -237,7 +329,9 @@ if do_gen:
         st.error(f"Gagal generate: {e}")
         st.info("Cek: model ID valid, rate limit, dan apakah Generative Language API sudah di-enable.")
 
-# ---------- Results ----------
+# ---------------------------
+# Results (outlined)
+# ---------------------------
 with st.container(border=True):
     st.subheader("🖼️ Results")
     if st.session_state.gallery:
@@ -245,6 +339,7 @@ with st.container(border=True):
         for i, item in enumerate(st.session_state.gallery):
             with cols[i % 2]:
                 try:
+                    from PIL import Image
                     img = Image.open(io.BytesIO(item["bytes"]))
                     st.image(img, caption=item["fname"], use_column_width=True)
                 except Exception:
@@ -254,7 +349,7 @@ with st.container(border=True):
                     data=item["bytes"],
                     file_name=item["fname"],
                     mime="image/png",
-                    key=f"dl_{st.session_state.gen_id}_{i}"
+                    key=f"dl_{st.session_state.gen_id}_{i}"  # unik per sesi + index
                 )
     else:
         st.caption("Belum ada hasil. Generate dulu ya.")
