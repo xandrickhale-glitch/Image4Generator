@@ -1,93 +1,94 @@
-# streamlit_app.py
-# Imagen 4 Generator — Gemini API (no billing, no JSON)
+# =============================================================================
+# Imagen 4 Generator — Gemini API (Qwiklabs, no billing, no JSON)
+# -----------------------------------------------------------------------------
 # Fitur:
-# - Import guard (jelas jika SDK/namespace bermasalah)
-# - Outline tipis antar bagian (container border=True)
-# - Prompt Doctor (enhancer) sesuai kaidah Imagen 4
-# - Gallery persisten (download tidak menghilangkan hasil)
-# - Model: imagen-4.0-generate-preview-06-06 & imagen-4.0-ultra-generate-preview-06-06
+# - Import guard: mendeteksi environment bermasalah (paket 'google' salah, SDK belum terpasang,
+#   atau ada folder/file lokal bernama 'google') lalu berhenti dengan pesan jelas di UI.
+# - Outline tipis via st.container(border=True).
+# - Prompt Doctor (enhancer) untuk menyusun prompt yang rapi sesuai kaidah Imagen 4.
+# - Gallery persisten (download tidak menghapus hasil), key unik per tombol.
+# - Model: imagen-4.0-generate-preview-06-06 (1–4), imagen-4.0-ultra-generate-preview-06-06 (1).
+# - Ekspor ZIP seluruh hasil + pilih output PNG/JPEG (konversi dengan PIL).
+# - History: menyimpan riwayat prompt & konfigurasi.
+# =============================================================================
 
 import os
 import io
-import pkgutil
+import zipfile
+import importlib
+from typing import List, Dict, Any
 
 import streamlit as st
-
-st.set_page_config(page_title="Imagen 4", page_icon="🎨", layout="wide")
-st.title("🎨 Imagen 4 — Gemini)")
+from PIL import Image
 
 # ---------------------------
-# Import Guard (anti-ImportError)
+# Konfigurasi halaman
 # ---------------------------
-problems = []
+st.set_page_config(page_title="Imagen 4 — Gemini API", page_icon="🎨", layout="wide")
+st.title("🎨 Imagen 4 — Gemini API (Qwiklabs, no JSON)")
 
-# 1) Cek konflik nama lokal 'google'
-if os.path.exists("./google") or os.path.exists("./google.py"):
-    problems.append(
-        "Ada folder/file bernama **`google`** di repo. Rename (mis. `gutils/`)."
-    )
+# ---------------------------
+# IMPORT GUARD (WAJIB di paling atas, sebelum import SDK)
+# ---------------------------
+def environment_guard() -> List[str]:
+    """Cek masalah umum yang bikin `google.genai` gagal diimpor."""
+    problems: List[str] = []
 
-# 2) Deteksi paket pip 'google' yang menimpa namespace
-has_bad_google = False
-try:
-    import google as _g  # type: ignore
-    # Jika ada __file__, biasanya ini paket 'google' lama yang men-shadow namespace package
-    if getattr(_g, "__file__", None):
-        has_bad_google = True
-except Exception:
-    # kalau import gagal di sini, biarkan guard berikutnya yang menangani
-    pass
+    # 1) Cek konflik nama lokal 'google'
+    if os.path.exists("./google") or os.path.exists("./google.py"):
+        problems.append("Ada folder/file bernama **`google`** di repo. Rename (mis. `gutils/`).")
 
-if has_bad_google:
-    problems.append(
-        "Terpasang paket pip **`google`** (bukan SDK resmi). Hapus dari requirements dan rebuild."
-    )
+    # 2) Cek paket pip 'google' (menimpa namespace package PEP 420)
+    bad_google = False
+    try:
+        import google as _g  # noqa: F401
+        # Jika punya __file__ fisik, seringnya itu paket 'google' yang tidak kompatibel
+        if getattr(_g, "__file__", None):
+            bad_google = True
+    except Exception:
+        # Jika gagal import di sini, tidak serta-merta masalah; lanjut cek SDK
+        pass
+    if bad_google:
+        problems.append("Terpasang paket pip **`google`**. Hapus dari requirements dan rebuild (gunakan **google-genai** saja).")
 
-# 3) Coba import google.genai untuk pastikan SDK terpasang
-_has_genai = True
-try:
-    from google import genai as _test_genai  # type: ignore
-    del _test_genai
-except Exception:
-    _has_genai = False
+    # 3) Cek ketersediaan modul google.genai (SDK)
+    if importlib.util.find_spec("google.genai") is None:
+        problems.append("SDK **`google-genai`** belum terpasang. Tambah `google-genai>=1.29.0,<2.0.0` di requirements.txt, lalu Clear cache + Restart.")
 
-if not _has_genai:
-    problems.append(
-        "Paket **`google-genai`** belum terpasang di environment. "
-        "Pastikan `requirements.txt` berisi `google-genai>=1.29.0,<2.0.0` lalu Clear cache + Restart."
-    )
+    return problems
 
-if problems:
+_guard_issues = environment_guard()
+if _guard_issues:
     with st.container(border=True):
         st.error("Gagal import `google.genai` karena masalah environment:")
-        for p in problems:
+        for p in _guard_issues:
             st.markdown(f"- {p}")
-        st.markdown(
-            "Langkah pemulihan cepat:\n"
-            "1) Hapus paket `google` dari requirements (jika ada)\n"
-            "2) Tambah `google-genai>=1.29.0,<2.0.0`\n"
-            "3) Pastikan tidak ada folder/file bernama `google` di repo\n"
-            "4) Clear cache + Restart app"
-        )
+        st.markdown("Perbaiki lalu **Manage app → Clear cache → Restart**.")
     st.stop()
 
-# Aman: import SDK resmi
-from google import genai  # type: ignore
-from google.genai import types  # type: ignore
-st.caption("✅ google-genai import OK — siap generate")
+# ✅ Import SDK via importlib (bukan `from google import genai`)
+genai = importlib.import_module("google.genai")
+types = importlib.import_module("google.genai.types")
+try:
+    import importlib.metadata as md
+    st.caption(f"SDK OK · google-genai {md.version('google-genai')}")
+except Exception:
+    st.caption("SDK OK · google-genai terpasang")
 
 # ---------------------------
-# Session State (persist hasil)
+# STATE (persist di session)
 # ---------------------------
 if "gallery" not in st.session_state:
-    st.session_state.gallery = []     # list of {"bytes":..., "fname": ...}
+    st.session_state.gallery: List[Dict[str, Any]] = []   # [{"bytes": b"...", "fname": "...", "format": "PNG"}]
 if "gen_id" not in st.session_state:
     st.session_state.gen_id = 0
 if "enhanced_preview" not in st.session_state:
     st.session_state.enhanced_preview = ""
+if "history" not in st.session_state:
+    st.session_state.history: List[Dict[str, Any]] = []   # simpan riwayat generate
 
 # ---------------------------
-# Helper: Aspect phrase + Prompt enhancer
+# Helper: Aspect phrase & Prompt enhancer
 # ---------------------------
 def aspect_phrase(ar: str) -> str:
     return {
@@ -113,7 +114,7 @@ def enhance_prompt(
     ar_text: str,
     safe_person_phrase: bool
 ) -> str:
-    parts = []
+    parts: List[str] = []
     if base.strip():
         parts.append(base.strip())
 
@@ -142,7 +143,7 @@ def enhance_prompt(
         if x and x != "None":
             parts.append(x)
 
-    # Camera (for Photo)
+    # Camera (Photo only)
     if medium == "Photo":
         cam_bits = []
         if camera_lens_mm.strip():
@@ -163,8 +164,38 @@ def enhance_prompt(
             clean.append(p); seen.add(p)
     return ", ".join(clean)
 
+def convert_bytes(img_bytes: bytes, out_format: str = "PNG") -> bytes:
+    """Konversi PNG bytes → PNG/JPEG sesuai pilihan. JPEG: pastikan RGB (tanpa alpha)."""
+    out_format = out_format.upper()
+    if out_format not in ("PNG", "JPEG"):
+        return img_bytes  # fallback
+    try:
+        im = Image.open(io.BytesIO(img_bytes))
+        buf = io.BytesIO()
+        if out_format == "JPEG":
+            if im.mode in ("RGBA", "LA"):
+                bg = Image.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im, mask=im.split()[-1])
+                im = bg
+            else:
+                im = im.convert("RGB")
+        im.save(buf, format=out_format, quality=95 if out_format == "JPEG" else None)
+        return buf.getvalue()
+    except Exception:
+        # Jika gagal konversi, kembalikan asli
+        return img_bytes
+
+def zip_gallery(items: List[Dict[str, Any]]) -> bytes:
+    """Buat ZIP in-memory dari semua item gallery."""
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for it in items:
+            zf.writestr(it["fname"], it["bytes"])
+    mem.seek(0)
+    return mem.getvalue()
+
 # ---------------------------
-# Sidebar: API & Config (outlined)
+# Sidebar: API & Config
 # ---------------------------
 with st.sidebar:
     st.header("🔑 API & Model")
@@ -187,14 +218,11 @@ with st.sidebar:
         aspect = st.selectbox("Aspect ratio", ["1:1","3:4","4:3","16:9","9:16"], index=0)
         people = st.selectbox("People generation", ["dont_allow","allow_adult","allow_all"], index=1)
         max_imgs = 1 if "ultra-generate" in model_id else 4
-        num_images = st.selectbox(
-            "Jumlah gambar",
-            options=list(range(1, max_imgs + 1)),
-            index=(max_imgs - 1)
-        )
+        num_images = st.selectbox("Jumlah gambar", options=list(range(1, max_imgs + 1)), index=(max_imgs - 1))
+        out_fmt = st.selectbox("Output format", ["PNG","JPEG"], index=0)
 
 # ---------------------------
-# Original Prompt (outlined)
+# Original Prompt
 # ---------------------------
 with st.container(border=True):
     st.subheader("🧾 Original Prompt")
@@ -208,11 +236,10 @@ with st.container(border=True):
     )
 
 # ---------------------------
-# Prompt Doctor / Enhancer (outlined)
+# Prompt Doctor (Enhancer)
 # ---------------------------
 with st.container(border=True):
     st.subheader("✨ Prompt Doctor — Imagen 4 style")
-
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     with c1:
         preset = st.selectbox("Preset", ["Cinematic","Studio Portrait","Product Shot","Illustration","3D Render","None"], index=0)
@@ -265,20 +292,22 @@ with st.container(border=True):
     )
 
 # ---------------------------
-# Actions (outlined)
+# Actions
 # ---------------------------
 with st.container(border=True):
     st.subheader("🚀 Generate & Manage")
-    col_a, col_b, col_c = st.columns([1,1,1])
+    col_a, col_b, col_c, col_d = st.columns([1,1,1,1])
     with col_a:
         do_gen = st.button("Generate")
     with col_b:
         clear_btn = st.button("Clear Gallery")
     with col_c:
-        st.write("")
+        zip_all = st.button("Download ZIP (All)")
+    with col_d:
+        show_diag = st.checkbox("Show Diagnostics", value=False)
 
 if clear_btn:
-    st.session_state.gallery = []
+    st.session_state.gallery.clear()
     st.rerun()
 
 # ---------------------------
@@ -317,39 +346,84 @@ if do_gen:
         if not generated:
             st.warning("Tidak ada gambar (mungkin diblokir safety atau kuota habis).")
         else:
+            # simpan hasil ke gallery (dengan konversi format bila dipilih)
             st.session_state.gen_id += 1
             gen_id = st.session_state.gen_id
             st.session_state.gallery = []
             for i, g in enumerate(generated, start=1):
-                img_bytes = g.image.image_bytes  # PNG by default (SDK)
-                fname = f"{model_id}_gen{gen_id}_{i}.png"
-                st.session_state.gallery.append({"bytes": img_bytes, "fname": fname})
+                raw = g.image.image_bytes  # default PNG
+                final_bytes = convert_bytes(raw, out_fmt)
+                fname = f"{model_id}_gen{gen_id}_{i}.{out_fmt.lower()}"
+                st.session_state.gallery.append({"bytes": final_bytes, "fname": fname, "format": out_fmt})
+
+            # simpan history
+            st.session_state.history.append({
+                "gen_id": gen_id,
+                "model": model_id,
+                "prompt_used": effective_prompt,
+                "aspect": aspect,
+                "people": people,
+                "num_images": int(num_images),
+                "format": out_fmt
+            })
 
     except Exception as e:
-        st.error(f"Gagal generate: {e}")
-        st.info("Cek: model ID valid, rate limit, dan apakah Generative Language API sudah di-enable.")
+        msg = str(e)
+        st.error(f"Gagal generate: {msg}")
+        if "429" in msg or "quota" in msg.lower() or "Rate" in msg:
+            st.info("Kamu mungkin terkena rate limit/kuota free tier. Coba kurangi request atau tunggu beberapa saat.")
 
 # ---------------------------
-# Results (outlined)
+# Results
 # ---------------------------
 with st.container(border=True):
     st.subheader("🖼️ Results")
     if st.session_state.gallery:
+        # Download ZIP semua
+        if zip_all:
+            zbytes = zip_gallery(st.session_state.gallery)
+            st.download_button("💾 Download ZIP Now", data=zbytes, file_name="imagen4_outputs.zip", type="primary")
+
         cols = st.columns(2)
         for i, item in enumerate(st.session_state.gallery):
             with cols[i % 2]:
                 try:
-                    from PIL import Image
-                    img = Image.open(io.BytesIO(item["bytes"]))
-                    st.image(img, caption=item["fname"], use_column_width=True)
+                    im = Image.open(io.BytesIO(item["bytes"]))
+                    st.image(im, caption=item["fname"], use_column_width=True)
                 except Exception:
                     st.error(f"Gagal pratinjau: {item['fname']}")
                 st.download_button(
-                    "💾 Download",
+                    "⬇️ Download",
                     data=item["bytes"],
                     file_name=item["fname"],
-                    mime="image/png",
-                    key=f"dl_{st.session_state.gen_id}_{i}"  # unik per sesi + index
+                    mime=f"image/{item.get('format','PNG').lower()}",
+                    key=f"dl_{st.session_state.gen_id}_{i}"
                 )
     else:
         st.caption("Belum ada hasil. Generate dulu ya.")
+
+# ---------------------------
+# History & Diagnostics
+# ---------------------------
+with st.container(border=True):
+    st.subheader("🧭 History & Diagnostics")
+    if st.session_state.history:
+        for h in reversed(st.session_state.history[-10:]):  # tampilkan 10 terakhir
+            with st.expander(f"gen_id={h['gen_id']} · {h['model']} · {h['num_images']} img · {h['format']}"):
+                st.write(f"**Prompt:** {h['prompt_used']}")
+                st.write(f"Aspect: {h['aspect']} · People: {h['people']}")
+    else:
+        st.caption("Belum ada history.")
+
+    if show_diag:
+        with st.expander("Diagnostics"):
+            st.write("Environment variables penting:")
+            st.code({k: os.getenv(k, "") for k in ["GEMINI_API_KEY"]})
+            st.write("Model aktif & konfigurasi:")
+            st.code({
+                "model_id": model_id,
+                "aspect": aspect,
+                "people": people,
+                "num_images": int(num_images),
+                "out_fmt": out_fmt
+            })
