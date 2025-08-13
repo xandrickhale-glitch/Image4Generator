@@ -24,8 +24,8 @@ from PIL import Image
 # ---------------------------
 # Konfigurasi halaman
 # ---------------------------
-st.set_page_config(page_title="Imagen 4 — Gemini API", page_icon="🎨", layout="wide")
-st.title("🎨 Imagen 4 — Gemini API (Qwiklabs, no JSON)")
+st.set_page_config(page_title="Imagen 4 Generator", page_icon="🎨", layout="wide")
+st.title("🎨 Imagen 4 — Gemini")
 
 # ---------------------------
 # IMPORT GUARD (WAJIB di paling atas, sebelum import SDK)
