@@ -5,8 +5,8 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="Image Generator", page_icon="🎨", layout="wide")
-st.title("🎨 Imagen 4 Pro")
+st.set_page_config(page_title="Imagen 4 — Gemini API", page_icon="🎨", layout="wide")
+st.title("🎨 Imagen 4 — Gemini API (Qwiklabs)")
 
 # ---------- Session state ----------
 if "gallery" not in st.session_state:
@@ -113,7 +113,7 @@ with st.sidebar:
 
     st.header("⚙️ Konfigurasi")
     with st.container(border=True):
-        aspect = st.selectbox("Aspect ratio", ["16:9","3:4","4:3","1:1","9:16"], index=0)
+        aspect = st.selectbox("Aspect ratio", ["1:1","3:4","4:3","16:9","9:16"], index=0)
         people = st.selectbox("People generation", ["dont_allow","allow_adult","allow_all"], index=1)
         max_imgs = 1 if "ultra-generate" in model_id else 4
         num_images = st.selectbox("Jumlah gambar", options=list(range(1, max_imgs+1)), index=(max_imgs-1))
@@ -130,7 +130,7 @@ with st.container(border=True):
 
 # ---------- Prompt Doctor (Enhancer) ----------
 with st.container(border=True):
-    st.subheader("✨ Prompt Doctor — Imagen 4")
+    st.subheader("✨ Prompt Doctor — Imagen 4 style")
     c1, c2, c3, c4 = st.columns([1,1,1,1])
     with c1:
         preset = st.selectbox("Preset", ["Cinematic","Studio Portrait","Product Shot","Illustration","3D Render","None"], index=0)
